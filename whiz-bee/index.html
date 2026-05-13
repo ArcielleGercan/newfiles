@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta charset="UTF-8">
+    <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+    <meta name="description" content="A new Flutter project.">
+    <!-- iOS meta tags & icons -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="apple-mobile-web-app-title" content="Starbooks Whiz Challenge">
+    <link rel="apple-touch-icon" href="icons/Icon-192.png">
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="starbooksnewlogo.png"/>
+    <title>Starbooks Whiz Challenge</title>
+    <link rel="manifest" href="manifest.json">
+</head>
+<body>
+<script>
+    // Force set the title immediately
+    document.title = "Starbooks Whiz Challenge";
+
+    window.flutterConfiguration = {
+      renderer: "html"
+    };
+
+    // Required for flutter_tts on Flutter Web.
+    // The browser's Web Speech API won't load voices until getVoices() is
+    // called at least once — without this, TTS speaks nothing on first load.
+    window.speechSynthesis.getVoices();
+    window.speechSynthesis.onvoiceschanged = function() {
+      window.speechSynthesis.getVoices(); // reload voices when they become available
+    };
+</script>
+<script src="flutter_bootstrap.js" async></script>
+
+<script>
+    // Set title again after page loads
+    window.addEventListener('load', function() {
+      document.title = "Starbooks Whiz Challenge";
+    });
+</script>
+</body>
+</html>
