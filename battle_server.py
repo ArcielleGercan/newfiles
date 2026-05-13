@@ -92,8 +92,9 @@ async def _handle_disconnect(user_id: str) -> None:
     room_code = _room_for_user(user_id)
     if not room_code:
         return
-    room = rooms[room_code]
-    if room["status"] == "finished":
+    room = rooms.get(room_code)
+    if room is None or room["status"] == "finished":
+        rooms.pop(room_code, None)
         return
 
     opponent_id = (
@@ -101,12 +102,52 @@ async def _handle_disconnect(user_id: str) -> None:
         if room["host_id"] == user_id
         else room["host_id"]
     )
+
+    # Notify opponent BEFORE removing the room
     if opponent_id and opponent_id in connected_players:
         await send_to_player(opponent_id, {"event": "player_disconnected"})
 
     # Clean up the room
     rooms.pop(room_code, None)
     print(f"🧹 Room {room_code} cleaned up after disconnect of {user_id}")
+
+
+async def _advance_round(room: dict, room_code: str) -> None:
+    """Called in a background task after both players answer.
+    Waits for the feedback delay then sends next_question or game_over."""
+    await asyncio.sleep(2.5)   # let clients show answer feedback
+
+    # Room may have been cleaned up (e.g. a player disconnected mid-sleep)
+    if room_code not in rooms:
+        return
+
+    if room["current_question_index"] < len(room["questions"]):
+        next_q = {"event": "next_question"}
+        await send_to_player(room["host_id"],     next_q)
+        await send_to_player(room["opponent_id"], next_q)
+    else:
+        # ── GAME OVER ──
+        room["status"] = "finished"
+        h_id = room["host_id"]
+        o_id = room["opponent_id"]
+        h_score = room["scores"].get(h_id, 0)
+        o_score = room["scores"].get(o_id, 0)
+
+        if h_score > o_score:
+            winner_id = h_id
+        elif o_score > h_score:
+            winner_id = o_id
+        else:
+            winner_id = None   # draw
+
+        game_over = {
+            "event":     "game_over",
+            "winner_id": winner_id,
+            "scores":    room["scores"],
+        }
+        await send_to_player(h_id, game_over)
+        await send_to_player(o_id, game_over)
+        print(f"🏁 Game over: {room_code}  winner={winner_id}")
 
 
 # ── WebSocket endpoint ───────────────────────────────────────────────────────
@@ -134,6 +175,12 @@ async def battle_websocket(websocket: WebSocket, user_id: str):
             # ── CREATE ROOM ──────────────────────────────────────────────────
             if event == "create_room":
                 room_code = data["room_code"]
+
+                # Clean up any previous room this user was hosting
+                old_code = _room_for_user(user_id)
+                if old_code and old_code != room_code:
+                    rooms.pop(old_code, None)
+
                 current_room = room_code
 
                 rooms[room_code] = {
@@ -161,7 +208,6 @@ async def battle_websocket(websocket: WebSocket, user_id: str):
             # ── JOIN ROOM ────────────────────────────────────────────────────
             elif event == "join_room":
                 room_code = data["room_code"]
-                current_room = room_code
 
                 if room_code not in rooms:
                     await send_to_player(user_id, {
@@ -200,6 +246,7 @@ async def battle_websocket(websocket: WebSocket, user_id: str):
                 room["scores"][user_id] = 0
                 room["correct_answers"][user_id] = 0
                 room["status"] = "ready"
+                current_room = room_code   # only set after all checks pass
 
                 print(f"👥 Player {user_id} joined room {room_code}")
 
@@ -311,36 +358,11 @@ async def battle_websocket(websocket: WebSocket, user_id: str):
                     room["current_question_index"] += 1
                     room["answers_this_round"] = {}
 
-                    # Advance to next question or end the game
-                    await asyncio.sleep(2.5)   # let clients show feedback
-
-                    if room["current_question_index"] < len(room["questions"]):
-                        next_q = {"event": "next_question"}
-                        await send_to_player(room["host_id"],     next_q)
-                        await send_to_player(room["opponent_id"], next_q)
-                    else:
-                        # ── GAME OVER ──
-                        room["status"] = "finished"
-                        h_id = room["host_id"]
-                        o_id = room["opponent_id"]
-                        h_score = room["scores"].get(h_id, 0)
-                        o_score = room["scores"].get(o_id, 0)
-
-                        if h_score > o_score:
-                            winner_id = h_id
-                        elif o_score > h_score:
-                            winner_id = o_id
-                        else:
-                            winner_id = None   # draw
-
-                        game_over = {
-                            "event":     "game_over",
-                            "winner_id": winner_id,
-                            "scores":    room["scores"],
-                        }
-                        await send_to_player(h_id, game_over)
-                        await send_to_player(o_id, game_over)
-                        print(f"🏁 Game over: {room_code}  winner={winner_id}")
+                    # Run the delay + next-step dispatch in a background task so
+                    # the message-receive loop is not blocked for 2.5 s.
+                    asyncio.create_task(
+                        _advance_round(room, room_code)
+                    )
 
             # ── LEAVE ROOM ───────────────────────────────────────────────────
             elif event == "leave_room":
